@@ -1,7 +1,5 @@
 import os
 import requests
-import logging
-
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,16 +10,9 @@ from telegram.ext import (
 )
 
 # =========================
-# ЛОГИ
+# TOKENS
 # =========================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
 
-# =========================
-# API KEYS
-# =========================
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 QWEN_API_KEY = os.getenv("QWEN_API_KEY")
 
@@ -31,98 +22,129 @@ if not TELEGRAM_TOKEN:
 if not QWEN_API_KEY:
     raise ValueError("Нет QWEN_API_KEY")
 
+print("Бот запущен...")
 
 # =========================
-# КНОПКИ
+# MEMORY
 # =========================
-keyboard = [
-    ["📦 Анализ товара", "💰 Юнит-экономика"],
-    ["📈 Продвижение", "🧠 Мои запросы"],
-    ["📰 Новости маркетплейсов"],
-]
 
-markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
+user_requests = {}
 
 # =========================
-# QWEN ЗАПРОС
+# MENU
 # =========================
-def ask_qwen(prompt):
 
-    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+menu = ReplyKeyboardMarkup(
+    [
+        ["📦 Анализ товара", "💰 Юнит-экономика"],
+        ["📈 Продвижение", "🛍 Улучшить карточку"],
+        ["🧠 Мои запросы", "📰 Новости маркетплейсов"],
+        ["ℹ️ Как это работает"],
+    ],
+    resize_keyboard=True,
+)
+
+# =========================
+# AI REQUEST
+# =========================
+
+def ask_qwen(prompt: str) -> str:
+    url = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1/chat/completions"
 
     headers = {
-        "Authorization": f"Bearer {QWEN_API_KEY}",
+        "Authorization": f"Bearer {QWEN_API_KEY.strip()}",
         "Content-Type": "application/json",
     }
 
     data = {
-        "model": "qwen3-max",
+        "model": "qwen-plus",
         "messages": [
             {
                 "role": "system",
-                "content": (
-                    "Ты эксперт по маркетплейсам (Wildberries, Ozon, Amazon). "
-                    "Даешь прикладные советы продавцам."
-                ),
+                "content": "Ты эксперт по торговле на маркетплейсах Wildberries, Ozon и Amazon.",
             },
             {"role": "user", "content": prompt},
         ],
-        "temperature": 0.7,
-        "max_tokens": 800,
     }
 
     response = requests.post(url, headers=headers, json=data)
-
-    if response.status_code != 200:
-        return f"Ошибка API: {response.text}"
 
     result = response.json()
 
     return result["choices"][0]["message"]["content"]
 
-
 # =========================
 # START
 # =========================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "MarketBoost AI запущен. Выберите раздел:",
-        reply_markup=markup,
+        "🚀 MarketBoost запущен!\n\nВыбери инструмент:",
+        reply_markup=menu,
     )
 
-
 # =========================
-# HANDLE
+# BUTTON HANDLER
 # =========================
-async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    user_text = update.message.text
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    user_id = update.message.from_user.id
 
-    msg = await update.message.reply_text("Анализирую...")
+    await update.message.reply_text("⏳ Анализирую...")
+
+    if text == "ℹ️ Как это работает":
+        await update.message.reply_text(
+            "Я анализирую товары, считаю прибыль, помогаю с продвижением "
+            "и улучшаю карточки товаров с помощью AI."
+        )
+        return
+
+    prompt = text
 
     try:
+        answer = ask_qwen(prompt)
 
-        answer = ask_qwen(user_text)
+        # memory
+        user_requests.setdefault(user_id, []).append(prompt)
 
-        await msg.edit_text(answer)
+        await update.message.reply_text(answer)
 
     except Exception as e:
-
-        logging.error(e)
-
-        await msg.edit_text(f"Ошибка: {e}")
-
+        await update.message.reply_text("❌ Ошибка AI. Попробуй позже.")
+        print(e)
 
 # =========================
-# APP
+# MY REQUESTS
 # =========================
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+async def my_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
 
-print("Бот запущен...")
+    history = user_requests.get(user_id, [])
 
-app.run_polling()
+    if not history:
+        await update.message.reply_text("Запросов пока нет.")
+        return
+
+    text = "\n".join(history[-5:])
+
+    await update.message.reply_text(f"🧠 Последние запросы:\n\n{text}")
+
+# =========================
+# MAIN
+# =========================
+
+def main():
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT, handle_message))
+    app.add_handler(
+        MessageHandler(filters.Regex("🧠 Мои запросы"), my_requests)
+    )
+
+    app.run_polling()
+
+if __name__ == "__main__":
+    main()
