@@ -1,7 +1,23 @@
 import os
 import requests
+import logging
+
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+# =========================
+# ЛОГИ
+# =========================
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
 # =========================
 # API KEYS
@@ -9,19 +25,27 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Con
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 QWEN_API_KEY = os.getenv("QWEN_API_KEY")
 
+if not TELEGRAM_TOKEN:
+    raise ValueError("Нет TELEGRAM_TOKEN")
+
+if not QWEN_API_KEY:
+    raise ValueError("Нет QWEN_API_KEY")
+
+
 # =========================
 # КНОПКИ
 # =========================
 keyboard = [
     ["📦 Анализ товара", "💰 Юнит-экономика"],
     ["📈 Продвижение", "🧠 Мои запросы"],
-    ["📰 Новости маркетплейсов"]
+    ["📰 Новости маркетплейсов"],
 ]
 
 markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
+
 # =========================
-# QWEN AI ЗАПРОС
+# QWEN ЗАПРОС
 # =========================
 def ask_qwen(prompt):
 
@@ -29,7 +53,7 @@ def ask_qwen(prompt):
 
     headers = {
         "Authorization": f"Bearer {QWEN_API_KEY}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
     }
 
     data = {
@@ -38,21 +62,20 @@ def ask_qwen(prompt):
             {
                 "role": "system",
                 "content": (
-                    "Ты эксперт по торговле на маркетплейсах "
-                    "(Wildberries, Ozon, Amazon). "
-                    "Даешь практические, прикладные советы продавцам."
-                )
+                    "Ты эксперт по маркетплейсам (Wildberries, Ozon, Amazon). "
+                    "Даешь прикладные советы продавцам."
+                ),
             },
-            {
-                "role": "user",
-                "content": prompt
-            }
+            {"role": "user", "content": prompt},
         ],
         "temperature": 0.7,
-        "max_tokens": 900
+        "max_tokens": 800,
     }
 
     response = requests.post(url, headers=headers, json=data)
+
+    if response.status_code != 200:
+        return f"Ошибка API: {response.text}"
 
     result = response.json()
 
@@ -60,18 +83,18 @@ def ask_qwen(prompt):
 
 
 # =========================
-# /start
+# START
 # =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
-        "AI-ассистент продавца маркетплейсов запущен.",
-        reply_markup=markup
+        "MarketBoost AI запущен. Выберите раздел:",
+        reply_markup=markup,
     )
 
 
 # =========================
-# ОБРАБОТКА СООБЩЕНИЙ
+# HANDLE
 # =========================
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -87,15 +110,19 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
 
-        await msg.edit_text(f"Ошибка AI: {e}")
+        logging.error(e)
+
+        await msg.edit_text(f"Ошибка: {e}")
 
 
 # =========================
-# ЗАПУСК
+# APP
 # =========================
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+
+print("Бот запущен...")
 
 app.run_polling()
