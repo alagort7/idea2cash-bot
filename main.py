@@ -1,133 +1,101 @@
 import os
+import requests
 from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
-from groq import Groq
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
-# --- КЛЮЧИ ---
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# =========================
+# API KEYS
+# =========================
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+QWEN_API_KEY = os.getenv("QWEN_API_KEY")
 
-client = Groq(api_key=GROQ_API_KEY)
+# =========================
+# КНОПКИ
+# =========================
+keyboard = [
+    ["📦 Анализ товара", "💰 Юнит-экономика"],
+    ["📈 Продвижение", "🧠 Мои запросы"],
+    ["📰 Новости маркетплейсов"]
+]
 
-# --- ЛИМИТЫ ---
-FREE_LIMIT = 3
-user_requests = {}
-user_counts = {}
+markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# --- МЕНЮ ---
-menu = ReplyKeyboardMarkup(
-    [
-        ["📉 Почему нет продаж", "🛍 Улучшить карточку"],
-        ["📊 Анализ ниши", "💰 Расчёт прибыли"],
-        ["💡 Идеи товаров"],
-        ["📂 Мои запросы"],
-        ["❓ Как это работает", "💼 Тарифы"],
-    ],
-    resize_keyboard=True
-)
+# =========================
+# QWEN AI ЗАПРОС
+# =========================
+def ask_qwen(prompt):
 
-# --- START ---
+    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {QWEN_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    data = {
+        "model": "qwen3-max",
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "Ты эксперт по торговле на маркетплейсах "
+                    "(Wildberries, Ozon, Amazon). "
+                    "Даешь практические, прикладные советы продавцам."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "temperature": 0.7,
+        "max_tokens": 900
+    }
+
+    response = requests.post(url, headers=headers, json=data)
+
+    result = response.json()
+
+    return result["choices"][0]["message"]["content"]
+
+
+# =========================
+# /start
+# =========================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     await update.message.reply_text(
-        "🚀 MarketBoost запущен!\n\n"
-        "🎁 Тебе доступно 3 бесплатных анализа\n\n"
-        "Выбери функцию 👇",
-        reply_markup=menu
+        "AI-ассистент продавца маркетплейсов запущен.",
+        reply_markup=markup
     )
 
-# --- ПОКАЗ ЗАПРОСОВ ---
-async def show_requests(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
 
-    if user_id not in user_requests:
-        await update.message.reply_text("Запросов пока нет.")
-        return
+# =========================
+# ОБРАБОТКА СООБЩЕНИЙ
+# =========================
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    text = "📂 Твои запросы:\n\n"
+    user_text = update.message.text
 
-    for i, req in enumerate(user_requests[user_id][-5:], 1):
-        text += f"{i}. {req}\n"
-
-    await update.message.reply_text(text)
-
-# --- ПРОВЕРКА ЛИМИТА ---
-def check_limit(user_id):
-
-    if user_id not in user_counts:
-        user_counts[user_id] = 0
-
-    if user_counts[user_id] >= FREE_LIMIT:
-        return False
-
-    user_counts[user_id] += 1
-    return True
-
-# --- AI ---
-async def ai_answer(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.message.from_user.id
-    text = update.message.text
-
-    # Кнопка истории
-    if text == "📂 Мои запросы":
-        await show_requests(update, context)
-        return
-
-    # Проверка лимита
-    if not check_limit(user_id):
-        await update.message.reply_text(
-            "❌ Лимит бесплатных анализов исчерпан.\n\n"
-            "Чтобы продолжить пользоваться ботом — оформи тариф 💼"
-        )
-        return
-
-    # Сохраняем запрос
-    if user_id not in user_requests:
-        user_requests[user_id] = []
-
-    user_requests[user_id].append(text)
-
-    await update.message.reply_text("⏳ Анализирую...")
+    msg = await update.message.reply_text("Анализирую...")
 
     try:
-        completion = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Ты эксперт по маркетплейсам Wildberries и Ozon."
-                },
-                {
-                    "role": "user",
-                    "content": text
-                }
-            ],
-            temperature=0.7,
-            max_tokens=800
-        )
 
-        answer = completion.choices[0].message.content
+        answer = ask_qwen(user_text)
 
-        await update.message.reply_text(answer)
+        await msg.edit_text(answer)
 
     except Exception as e:
-        await update.message.reply_text(f"Ошибка AI:\n{e}")
 
-# --- MAIN ---
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+        await msg.edit_text(f"Ошибка AI: {e}")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, ai_answer))
 
-    print("Bot started...")
-    app.run_polling()
+# =========================
+# ЗАПУСК
+# =========================
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
-if __name__ == "__main__":
-    main()
+app.add_handler(CommandHandler("start", start))
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
+
+app.run_polling()
